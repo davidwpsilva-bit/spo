@@ -34,36 +34,32 @@ function parseArtistIds(ids) {
 }
 
 // ==========================================
-// COMANDOS GERAIS (Agora adaptados para Grupos)
+// COMANDOS GERAIS (/menu, /start, /novidade)
 // ==========================================
 
-// O regex (?:@\w+)? permite que o comando funcione com ou sem o @ do bot no grupo
-bot.onText(/^\/(novidade|novidades)(?:@\w+)?$/, (msg) => {
+bot.onText(/\/(novidade|novidades)/, (msg) => {
     handleNovidades(msg.chat.id);
 });
 
-bot.onText(/^\/chart(?:@\w+)?$/, (msg) => {
-    handleChart(msg.chat.id);
-});
-
-bot.onText(/^\/menu(?:@\w+)?$/, (msg) => {
+bot.onText(/\/menu/, (msg) => {
     const userId = msg.from.id;
     const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
     
+    // Aceita visitantes! Se não tiver login, entra como Visitante.
     const isLoggedIn = !!userSessions[userId];
     const playerName = isLoggedIn ? userSessions[userId].name : "Visitante";
     
     sendMainMenu(msg.chat.id, playerName, isGroup, isLoggedIn);
 });
 
-bot.onText(/^\/start(?:@\w+)?$/, async (msg) => {
+bot.onText(/\/start/, async (msg) => {
     const userId = msg.from.id;
     const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
 
     if (isGroup) {
         return bot.sendMessage(msg.chat.id, `👋 Bem-vindos ao <b>Spotify RPG</b>!\n\nUsa o comando /menu para veres os charts e novidades, ou fala comigo no privado para gerires a tua agência.`, { 
             parse_mode: 'HTML', 
-            reply_markup: { inline_keyboard: [[{ text: "🎧 Fazer Login (Privado)", url: `https://t.me/SpotifyRpgBot` }]] } // Altera para o link real do teu bot
+            reply_markup: { inline_keyboard: [[{ text: "🎧 Fazer Login (Privado)", url: `https://t.me/${(await bot.getMe()).username}` }]] }
         });
     }
 
@@ -168,7 +164,7 @@ bot.on('message', async (msg) => {
 // ==========================================
 // INTERFACE E MENUS
 // ==========================================
-function sendMainMenu(chatId, playerName, isGroup, isLoggedIn) {
+function getMainMenuMarkup(playerName, isGroup, isLoggedIn) {
     let texto = `🎵 <b>CENTRAL DO MANAGER</b>\n\nOlá, <b>${playerName}</b>! O que desejas fazer?`;
     const teclado = { inline_keyboard: [] };
     
@@ -191,19 +187,23 @@ function sendMainMenu(chatId, playerName, isGroup, isLoggedIn) {
         }
     }
 
-    // A SOLUÇÃO MÁGICA PARA GRUPOS!
-    if (isGroup) {
-        // Telegram proíbe web_app em grupos, enviamos link normal
-        teclado.inline_keyboard.push([{ text: "🎮 Abrir o Jogo (Site)", url: "https://melancholyloveoff.github.io/spotify/" }]);
-    } else {
-        // No privado, funciona como Web App
-        teclado.inline_keyboard.push([{ text: "🎮 Abrir Web App", web_app: { url: "https://melancholyloveoff.github.io/spotify/" } }]);
-    }
+    teclado.inline_keyboard.push([{ text: "🎮 Abrir Web App", web_app: { url: "https://melancholyloveoff.github.io/spotify/" } }]);
 
-    bot.sendMessage(chatId, texto, { parse_mode: 'HTML', reply_markup: teclado });
+    return { texto, options: { parse_mode: 'HTML', reply_markup: teclado } };
 }
 
-function sendConfigMenu(chatId) {
+function sendMainMenu(chatId, playerName, isGroup, isLoggedIn) {
+    const menu = getMainMenuMarkup(playerName, isGroup, isLoggedIn);
+    bot.sendMessage(chatId, menu.texto, menu.options);
+}
+
+// Edita uma mensagem existente para mostrar o menu principal
+function editToMainMenu(chatId, messageId, playerName, isGroup, isLoggedIn) {
+    const menu = getMainMenuMarkup(playerName, isGroup, isLoggedIn);
+    bot.editMessageText(menu.texto, { chat_id: chatId, message_id: messageId, ...menu.options }).catch(() => {});
+}
+
+function editToConfigMenu(chatId, messageId) {
     const texto = `⚙️ <b>CONFIGURAÇÕES</b>\n\nAqui podes editar os teus dados de jogador e personalizar os teus artistas:`;
     const teclado = {
         inline_keyboard: [
@@ -212,43 +212,16 @@ function sendConfigMenu(chatId) {
             [{ text: "⬅️ Voltar", callback_data: "menu_voltar" }]
         ]
     };
-    bot.sendMessage(chatId, texto, { parse_mode: 'HTML', reply_markup: teclado });
+    bot.editMessageText(texto, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: teclado }).catch(() => {});
 }
 
 // ==========================================
-// FUNÇÕES AUTÓNOMAS (CHART, NOVIDADES, ETC)
+// LISTAGENS, NOVIDADES E AÇÕES (COM FOTOS)
 // ==========================================
-
-async function handleChart(chatId) {
-    bot.sendMessage(chatId, "📈 <i>A consultar o Top Global...</i>", { parse_mode: 'HTML' });
-    
-    const { data: songs, error } = await supabase.from('songs').select('id, title, streams, previous_rank, artist_ids').order('streams', { ascending: false }).limit(10);
-        
-    if (error || !songs || songs.length === 0) return bot.sendMessage(chatId, "😔 Chart indisponível.");
-    
-    let chartMsg = `🏆 <b>CHART DIÁRIO GLOBAL (TOP 10)</b> 🏆\n\n`;
-    for (const [index, s] of songs.entries()) {
-        const posicaoAtual = index + 1;
-        let trend = "➖";
-        if (!s.previous_rank) trend = "🆕";
-        else if (posicaoAtual < s.previous_rank) trend = "🔺";
-        else if (posicaoAtual > s.previous_rank) trend = "🔻";
-
-        let artistName = "Artista Desconhecido";
-        const artistIds = parseArtistIds(s.artist_ids);
-        if (artistIds.length > 0) {
-            const { data: artist } = await supabase.from('artists').select('name').eq('id', artistIds[0]).single();
-            if (artist) artistName = artist.name;
-        }
-
-        let medalha = posicaoAtual === 1 ? "🥇" : posicaoAtual === 2 ? "🥈" : posicaoAtual === 3 ? "🥉" : `<b>${posicaoAtual}.</b>`;
-        chartMsg += `${medalha} <b>${s.title}</b> - ${artistName} \n└ ${trend} • <i>${formatNumber(s.streams)} streams</i>\n\n`;
-    }
-    return bot.sendMessage(chatId, chartMsg, { parse_mode: 'HTML' });
-}
 
 async function handleNovidades(chatId) {
     bot.sendMessage(chatId, "🌟 <i>A reunir as últimas novidades da Agência...</i>", { parse_mode: 'HTML' });
+    
     try {
         let encontrouNovidades = false;
 
@@ -303,9 +276,11 @@ async function handleNovidades(chatId) {
 async function handlePersonagens(chatId, userId) {
     const player = userSessions[userId];
     const artistIds = parseArtistIds(player.artist_ids);
+
     if (artistIds.length === 0) return bot.sendMessage(chatId, "A tua agência está vazia. Usa a opção 'Criar Personagem' no privado!");
 
     const { data: artists } = await supabase.from('artists').select('*').in('id', artistIds);
+
     for (const artist of artists) {
         const legenda = `👤 <b>${artist.name}</b>\n✨ Pontos RPG: <b>${artist.rpg_points || 0}</b> | 💎 Pessoais: <b>${artist.personal_points || 0}</b>`;
         const foto = artist.image_url || "https://i.imgur.com/AD3MbBi.png";
@@ -313,15 +288,15 @@ async function handlePersonagens(chatId, userId) {
     }
 }
 
-async function handleAcoesMenu(chatId, userId) {
+async function editToAcoesMenu(chatId, messageId, userId) {
     const player = userSessions[userId];
     const artistIds = parseArtistIds(player.artist_ids);
-    if (artistIds.length === 0) return bot.sendMessage(chatId, "Precisas de ter um personagem primeiro!");
+    if (artistIds.length === 0) return bot.editMessageText("Precisas de ter um personagem primeiro!", { chat_id: chatId, message_id: messageId }).catch(() => {});
 
     const { data: artists } = await supabase.from('artists').select('id, name').in('id', artistIds);
     const teclado = { inline_keyboard: artists.map(a => [{ text: `👤 ${a.name}`, callback_data: `sel_art_${a.id}` }]) };
     teclado.inline_keyboard.push([{ text: "⬅️ Voltar", callback_data: "menu_voltar" }]);
-    bot.sendMessage(chatId, "⚡ <b>SISTEMA DE PROMOÇÃO</b>\nEscolhe o artista:", { parse_mode: 'HTML', reply_markup: teclado });
+    bot.editMessageText("⚡ <b>SISTEMA DE PROMOÇÃO</b>\nEscolhe o artista:", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: teclado }).catch(() => {});
 }
 
 // ==========================================
@@ -329,6 +304,7 @@ async function handleAcoesMenu(chatId, userId) {
 // ==========================================
 bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
+    const messageId = query.message.message_id; // ID DA MENSAGEM DO BOTÃO
     const userId = query.from.id;
     const data = query.data;
     const isGroup = query.message.chat.type === 'group' || query.message.chat.type === 'supergroup';
@@ -354,39 +330,71 @@ bot.on('callback_query', async (query) => {
 
     bot.answerCallbackQuery(query.id);
 
+    // MENSAGENS QUE EDITA
     if (data === "cmd_login") {
         pendingStates[userId] = { type: 'LOGIN_NAME' };
-        return bot.sendMessage(chatId, `👋 <b>Bem-vindo!</b>\n\nDigita o teu <b>Nome de Jogador</b>:`, { parse_mode: 'HTML' });
+        return bot.editMessageText(`👋 <b>Bem-vindo!</b>\n\nDigita o teu <b>Nome de Jogador</b> no campo de texto:`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(() => {});
     }
 
-    if (data === "menu_voltar") return sendMainMenu(chatId, userSessions[userId]?.name || "Visitante", isGroup, !!userSessions[userId]);
+    if (data === "menu_voltar") return editToMainMenu(chatId, messageId, userSessions[userId]?.name || "Visitante", isGroup, !!userSessions[userId]);
+    if (data === "menu_acoes") return editToAcoesMenu(chatId, messageId, userId);
+    if (data === "menu_config") return editToConfigMenu(chatId, messageId);
+
+    // MENSAGENS QUE SÃO NOVAS (NOVIDADES, PERSONAGENS E CHART NÃO DÁ PRA EDITAR BEM DEVIDO A FOTOS/TAMANHO)
     if (data === "menu_novidades") return handleNovidades(chatId);
     if (data === "menu_personagens") return handlePersonagens(chatId, userId);
-    if (data === "menu_acoes") return handleAcoesMenu(chatId, userId);
-    if (data === "menu_config") return sendConfigMenu(chatId);
-    if (data === "menu_chart") return handleChart(chatId);
+    
+    if (data === "menu_chart") {
+        bot.sendMessage(chatId, "📈 <i>A consultar o Top Global...</i>", { parse_mode: 'HTML' });
+        
+        const { data: songs, error } = await supabase.from('songs').select('id, title, streams, previous_rank, artist_ids').order('streams', { ascending: false }).limit(10);
+            
+        if (error || !songs || songs.length === 0) return bot.sendMessage(chatId, "😔 Chart indisponível.");
+        
+        let chartMsg = `🏆 <b>CHART DIÁRIO GLOBAL (TOP 10)</b> 🏆\n\n`;
+        for (const [index, s] of songs.entries()) {
+            const posicaoAtual = index + 1;
+            let trend = "➖";
+            if (!s.previous_rank) trend = "🆕";
+            else if (posicaoAtual < s.previous_rank) trend = "🔺";
+            else if (posicaoAtual > s.previous_rank) trend = "🔻";
 
+            let artistName = "Artista Desconhecido";
+            const artistIds = parseArtistIds(s.artist_ids);
+            if (artistIds.length > 0) {
+                const { data: artist } = await supabase.from('artists').select('name').eq('id', artistIds[0]).single();
+                if (artist) artistName = artist.name;
+            }
+
+            let medalha = posicaoAtual === 1 ? "🥇" : posicaoAtual === 2 ? "🥈" : posicaoAtual === 3 ? "🥉" : `<b>${posicaoAtual}.</b>`;
+            chartMsg += `${medalha} <b>${s.title}</b> - ${artistName} \n└ ${trend} • <i>${formatNumber(s.streams)} streams</i>\n\n`;
+        }
+        return bot.sendMessage(chatId, chartMsg, { parse_mode: 'HTML' });
+    }
+
+    // CONFIGURAÇÕES (EDITAM A MENSAGEM)
     if (data === "cmd_criar_personagem" && !isGroup) {
         pendingStates[userId] = { type: 'CREATE_ARTIST_NAME' };
-        return bot.sendMessage(chatId, "➕ <b>Novo Personagem</b>\n\nDigita o nome do teu novo artista/grupo:", { parse_mode: 'HTML' });
+        return bot.editMessageText("➕ <b>Novo Personagem</b>\n\nDigita o nome do teu novo artista/grupo no campo de texto:", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(() => {});
     }
 
     if (data === "cfg_edit_p_name" && !isGroup) {
         pendingStates[userId] = { type: 'EDIT_PLAYER_NAME' };
-        return bot.sendMessage(chatId, "✏️ Digita o teu NOVO Nome de Jogador:");
+        return bot.editMessageText("✏️ Digita o teu NOVO Nome de Jogador no campo de texto:", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(() => {});
     }
     if (data === "cfg_edit_p_pass" && !isGroup) {
         pendingStates[userId] = { type: 'EDIT_PLAYER_PASS' };
-        return bot.sendMessage(chatId, "🔒 Digita a tua NOVA Senha:");
+        return bot.editMessageText("🔒 Digita a tua NOVA Senha no campo de texto:", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(() => {});
     }
 
     if (data === "cfg_edit_art_list" && !isGroup) {
         const artistIds = parseArtistIds(userSessions[userId].artist_ids);
-        if(artistIds.length === 0) return bot.sendMessage(chatId, "Não tens personagens para editar.");
+        if(artistIds.length === 0) return bot.editMessageText("Não tens personagens para editar.", { chat_id: chatId, message_id: messageId }).catch(() => {});
         const { data: artists } = await supabase.from('artists').select('id, name').in('id', artistIds);
+        
         const teclado = { inline_keyboard: artists.map(a => [{ text: `✏️ ${a.name}`, callback_data: `ed_art_${a.id}` }]) };
         teclado.inline_keyboard.push([{ text: "⬅️ Voltar", callback_data: "menu_config" }]);
-        return bot.sendMessage(chatId, "Qual o personagem que desejas editar?", { reply_markup: teclado });
+        return bot.editMessageText("Qual o personagem que desejas editar?", { chat_id: chatId, message_id: messageId, reply_markup: teclado }).catch(() => {});
     }
 
     if (data.startsWith("ed_art_") && !isGroup) {
@@ -397,18 +405,19 @@ bot.on('callback_query', async (query) => {
                 [{ text: "⬅️ Voltar", callback_data: "cfg_edit_art_list" }]
             ]
         };
-        return bot.sendMessage(chatId, "O que pretendes alterar neste personagem?", { reply_markup: teclado });
+        return bot.editMessageText("O que pretendes alterar neste personagem?", { chat_id: chatId, message_id: messageId, reply_markup: teclado }).catch(() => {});
     }
 
     if (data.startsWith("do_ed_art_name_") && !isGroup) {
         pendingStates[userId] = { type: 'EDIT_ARTIST_NAME', artistId: data.replace("do_ed_art_name_", "") };
-        return bot.sendMessage(chatId, "✏️ Digita o NOVO NOME do personagem:");
+        return bot.editMessageText("✏️ Digita o NOVO NOME do personagem no campo de texto:", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(() => {});
     }
     if (data.startsWith("do_ed_art_foto_") && !isGroup) {
         pendingStates[userId] = { type: 'EDIT_ARTIST_PHOTO', artistId: data.replace("do_ed_art_foto_", "") };
-        return bot.sendMessage(chatId, "🖼️ Envia o NOVO URL da foto do personagem:");
+        return bot.editMessageText("🖼️ Envia o NOVO URL da foto do personagem no campo de texto:", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(() => {});
     }
 
+    // AÇÕES - Selecionar tipo
     if (data.startsWith("sel_art_")) {
         const artistId = data.replace("sel_art_", "");
         const teclado = {
@@ -420,9 +429,10 @@ bot.on('callback_query', async (query) => {
                 [{ text: "⬅️ Voltar", callback_data: "menu_acoes" }]
             ]
         };
-        return bot.sendMessage(chatId, "Seleciona a ação de promoção pretendida:", { reply_markup: teclado });
+        return bot.editMessageText("Seleciona a ação de promoção pretendida:", { chat_id: chatId, message_id: messageId, reply_markup: teclado }).catch(() => {});
     }
 
+    // AÇÕES - Executar Ação (E ENVIAR FOTO NOVA)
     if (data.startsWith("act_")) {
         const match = data.match(/act_(.*)_([^_]+-[^_]+-[^_]+-[^_]+-[^_]+)$/);
         if (match) {
@@ -437,17 +447,23 @@ bot.on('callback_query', async (query) => {
             };
 
             const configDaAcao = LIMITES_ACOES[actionKey];
+
             const { data: artist } = await supabase.from('artists').select('*').eq('id', artistId).single();
             const countAtual = artist[actionKey] || 0;
 
             if (countAtual >= configDaAcao.limit) {
-                return bot.sendMessage(chatId, `❌ <b>Limite Atingido!</b>\nO personagem <b>${artist.name}</b> já atingiu o limite semanal de ${configDaAcao.limit}/${configDaAcao.limit} para ${configDaAcao.name}.`, { parse_mode: 'HTML' });
+                return bot.answerCallbackQuery(query.id, { text: `❌ Limite Atingido! ${artist.name} já tem ${configDaAcao.limit}/${configDaAcao.limit} em ${configDaAcao.name}.`, show_alert: true });
             }
 
             const newVal = countAtual + 1;
             await supabase.from('artists').update({ [actionKey]: newVal }).eq('id', artistId);
             
             const foto = artist.image_url || "https://i.imgur.com/AD3MbBi.png";
+            
+            // Edita a mensagem do menu a dizer que foi sucesso
+            bot.editMessageText(`✅ <b>Ação registada!</b> A enviar confirmação visual...`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(() => {});
+            
+            // E envia a nova foto de confirmação
             bot.sendPhoto(chatId, foto, { 
                 caption: `✅ <b>AÇÃO DE PROMOÇÃO REALIZADA!</b>\n\nO personagem <b>${artist.name}</b> participou em: <b>${configDaAcao.name}</b>.\n\n📈 Limite semanal atual: <b>${newVal}/${configDaAcao.limit}</b>`, 
                 parse_mode: 'HTML' 
