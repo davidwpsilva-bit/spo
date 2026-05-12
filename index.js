@@ -34,32 +34,31 @@ function parseArtistIds(ids) {
 }
 
 // ==========================================
-// COMANDOS GERAIS (/menu, /start, /novidade)
+// COMANDOS GERAIS E FLUXO INICIAL
 // ==========================================
 
-bot.onText(/\/(novidade|novidades)/, (msg) => {
-    handleNovidades(msg.chat.id);
-});
+bot.onText(/^\/(novidade|novidades)(?:@\w+)?$/, (msg) => { handleNovidades(msg.chat.id); });
 
-bot.onText(/\/menu/, (msg) => {
+bot.onText(/^\/chart(?:@\w+)?$/, (msg) => { handleChartCommand(msg.chat.id); });
+
+// CORREÇÃO: Comando menu adaptado para funcionar nos Grupos
+bot.onText(/^\/menu(?:@\w+)?$/, (msg) => {
     const userId = msg.from.id;
     const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
-    
-    // Aceita visitantes! Se não tiver login, entra como Visitante.
     const isLoggedIn = !!userSessions[userId];
     const playerName = isLoggedIn ? userSessions[userId].name : "Visitante";
     
     sendMainMenu(msg.chat.id, playerName, isGroup, isLoggedIn);
 });
 
-bot.onText(/\/start/, async (msg) => {
+bot.onText(/^\/start(?:@\w+)?$/, async (msg) => {
     const userId = msg.from.id;
     const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
 
     if (isGroup) {
         return bot.sendMessage(msg.chat.id, `👋 Bem-vindos ao <b>Spotify RPG</b>!\n\nUsa o comando /menu para veres os charts e novidades, ou fala comigo no privado para gerires a tua agência.`, { 
             parse_mode: 'HTML', 
-            reply_markup: { inline_keyboard: [[{ text: "🎧 Fazer Login (Privado)", url: `https://t.me/${(await bot.getMe()).username}` }]] }
+            reply_markup: { inline_keyboard: [[{ text: "🎧 Fazer Login (Privado)", url: `https://t.me/SpotifyRpgBot` }]] } // Certifica-te que pões o nome real do teu bot aqui
         });
     }
 
@@ -70,7 +69,7 @@ bot.onText(/\/start/, async (msg) => {
 });
 
 // ==========================================
-// CAPTURA DE RESPOSTAS (LOGIN E FORMULÁRIOS)
+// CAPTURA DE RESPOSTAS (TEXTO MANUAL)
 // ==========================================
 bot.on('message', async (msg) => {
     const userId = msg.from.id;
@@ -164,6 +163,8 @@ bot.on('message', async (msg) => {
 // ==========================================
 // INTERFACE E MENUS
 // ==========================================
+
+// Função geradora de markup de menus
 function getMainMenuMarkup(playerName, isGroup, isLoggedIn) {
     let texto = `🎵 <b>CENTRAL DO MANAGER</b>\n\nOlá, <b>${playerName}</b>! O que desejas fazer?`;
     const teclado = { inline_keyboard: [] };
@@ -177,7 +178,7 @@ function getMainMenuMarkup(playerName, isGroup, isLoggedIn) {
     if (!isGroup) {
         if (isLoggedIn) {
             teclado.inline_keyboard.push([{ text: "➕ Criar Personagem", callback_data: "cmd_criar_personagem" }]);
-            teclado.inline_keyboard.push([{ text: "⚙️ Configurações (Conta/Artistas)", callback_data: "menu_config" }]);
+            teclado.inline_keyboard.push([{ text: "⚙️ Configurações", callback_data: "menu_config" }]);
         } else {
             teclado.inline_keyboard.push([{ text: "🔑 Fazer Login", callback_data: "cmd_login" }]);
         }
@@ -187,45 +188,62 @@ function getMainMenuMarkup(playerName, isGroup, isLoggedIn) {
         }
     }
 
-    teclado.inline_keyboard.push([{ text: "🎮 Abrir Web App", web_app: { url: "https://melancholyloveoff.github.io/spotify/" } }]);
+    // Grupos não podem usar web_app
+    if (isGroup) {
+        teclado.inline_keyboard.push([{ text: "🎮 Abrir o Jogo (Site)", url: "https://melancholyloveoff.github.io/spotify/" }]);
+    } else {
+        teclado.inline_keyboard.push([{ text: "🎮 Abrir Web App", web_app: { url: "https://melancholyloveoff.github.io/spotify/" } }]);
+    }
 
     return { texto, options: { parse_mode: 'HTML', reply_markup: teclado } };
 }
 
+// Envia uma MENSAGEM NOVA (quando usas /menu, por exemplo)
 function sendMainMenu(chatId, playerName, isGroup, isLoggedIn) {
     const menu = getMainMenuMarkup(playerName, isGroup, isLoggedIn);
-    bot.sendMessage(chatId, menu.texto, menu.options);
+    bot.sendMessage(chatId, menu.texto, menu.options).catch(err => console.error("Erro sendMainMenu:", err));
 }
 
-// Edita uma mensagem existente para mostrar o menu principal
+// EDITA UMA MENSAGEM EXISTENTE (quando clicas no botão "Voltar")
 function editToMainMenu(chatId, messageId, playerName, isGroup, isLoggedIn) {
     const menu = getMainMenuMarkup(playerName, isGroup, isLoggedIn);
     bot.editMessageText(menu.texto, { chat_id: chatId, message_id: messageId, ...menu.options }).catch(() => {});
 }
 
-function editToConfigMenu(chatId, messageId) {
-    const texto = `⚙️ <b>CONFIGURAÇÕES</b>\n\nAqui podes editar os teus dados de jogador e personalizar os teus artistas:`;
-    const teclado = {
-        inline_keyboard: [
-            [{ text: "✏️ Alterar Meu Nome", callback_data: "cfg_edit_p_name" }, { text: "🔒 Alterar Senha", callback_data: "cfg_edit_p_pass" }],
-            [{ text: "🖼️ Editar Meus Personagens", callback_data: "cfg_edit_art_list" }],
-            [{ text: "⬅️ Voltar", callback_data: "menu_voltar" }]
-        ]
-    };
-    bot.editMessageText(texto, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: teclado }).catch(() => {});
-}
+// ==========================================
+// FUNÇÕES ESPECIAIS (CHART, NOVIDADES, FOTOS)
+// ==========================================
 
-// ==========================================
-// LISTAGENS, NOVIDADES E AÇÕES (COM FOTOS)
-// ==========================================
+async function handleChartCommand(chatId) {
+    bot.sendMessage(chatId, "📈 <i>A consultar o Top Global...</i>", { parse_mode: 'HTML' });
+    const { data: songs, error } = await supabase.from('songs').select('id, title, streams, previous_rank, artist_ids').order('streams', { ascending: false }).limit(10);
+    if (error || !songs || songs.length === 0) return bot.sendMessage(chatId, "😔 Chart indisponível.");
+    
+    let chartMsg = `🏆 <b>CHART DIÁRIO GLOBAL (TOP 10)</b> 🏆\n\n`;
+    for (const [index, s] of songs.entries()) {
+        const posicaoAtual = index + 1;
+        let trend = "➖";
+        if (!s.previous_rank) trend = "🆕";
+        else if (posicaoAtual < s.previous_rank) trend = "🔺";
+        else if (posicaoAtual > s.previous_rank) trend = "🔻";
+
+        let artistName = "Artista Desconhecido";
+        const artistIds = parseArtistIds(s.artist_ids);
+        if (artistIds.length > 0) {
+            const { data: artist } = await supabase.from('artists').select('name').eq('id', artistIds[0]).single();
+            if (artist) artistName = artist.name;
+        }
+
+        let medalha = posicaoAtual === 1 ? "🥇" : posicaoAtual === 2 ? "🥈" : posicaoAtual === 3 ? "🥉" : `<b>${posicaoAtual}.</b>`;
+        chartMsg += `${medalha} <b>${s.title}</b> - ${artistName} \n└ ${trend} • <i>${formatNumber(s.streams)} streams</i>\n\n`;
+    }
+    return bot.sendMessage(chatId, chartMsg, { parse_mode: 'HTML' });
+}
 
 async function handleNovidades(chatId) {
     bot.sendMessage(chatId, "🌟 <i>A reunir as últimas novidades da Agência...</i>", { parse_mode: 'HTML' });
-    
     try {
         let encontrouNovidades = false;
-
-        // 1. LANÇAMENTOS RECENTES
         const { data: albums } = await supabase.from('albums').select('id, title, image_url, release_date, artist_id').not('release_date', 'is', null).order('release_date', { ascending: false }).limit(3);
         const { data: singles } = await supabase.from('singles').select('id, title, image_url, release_date, artist_id').not('release_date', 'is', null).order('release_date', { ascending: false }).limit(3);
         
@@ -253,7 +271,6 @@ async function handleNovidades(chatId) {
 
         await new Promise(resolve => setTimeout(resolve, 500)); 
 
-        // 2. ARTISTAS RECENTES
         const { data: artists } = await supabase.from('artists').select('id, name, image_url, rpg_points').order('id', { ascending: false }).limit(3);
         if (artists && artists.length > 0) {
             encontrouNovidades = true;
@@ -265,22 +282,16 @@ async function handleNovidades(chatId) {
             }
         }
 
-        if (!encontrouNovidades) {
-            bot.sendMessage(chatId, "😔 Nenhuma novidade encontrada no catálogo de momento.");
-        }
-    } catch (error) {
-        bot.sendMessage(chatId, "❌ Ocorreu um erro ao procurar as novidades.");
-    }
+        if (!encontrouNovidades) bot.sendMessage(chatId, "😔 Nenhuma novidade encontrada no catálogo de momento.");
+    } catch (error) { bot.sendMessage(chatId, "❌ Ocorreu um erro ao procurar as novidades."); }
 }
 
 async function handlePersonagens(chatId, userId) {
     const player = userSessions[userId];
     const artistIds = parseArtistIds(player.artist_ids);
-
     if (artistIds.length === 0) return bot.sendMessage(chatId, "A tua agência está vazia. Usa a opção 'Criar Personagem' no privado!");
 
     const { data: artists } = await supabase.from('artists').select('*').in('id', artistIds);
-
     for (const artist of artists) {
         const legenda = `👤 <b>${artist.name}</b>\n✨ Pontos RPG: <b>${artist.rpg_points || 0}</b> | 💎 Pessoais: <b>${artist.personal_points || 0}</b>`;
         const foto = artist.image_url || "https://i.imgur.com/AD3MbBi.png";
@@ -288,34 +299,25 @@ async function handlePersonagens(chatId, userId) {
     }
 }
 
-async function editToAcoesMenu(chatId, messageId, userId) {
-    const player = userSessions[userId];
-    const artistIds = parseArtistIds(player.artist_ids);
-    if (artistIds.length === 0) return bot.editMessageText("Precisas de ter um personagem primeiro!", { chat_id: chatId, message_id: messageId }).catch(() => {});
-
-    const { data: artists } = await supabase.from('artists').select('id, name').in('id', artistIds);
-    const teclado = { inline_keyboard: artists.map(a => [{ text: `👤 ${a.name}`, callback_data: `sel_art_${a.id}` }]) };
-    teclado.inline_keyboard.push([{ text: "⬅️ Voltar", callback_data: "menu_voltar" }]);
-    bot.editMessageText("⚡ <b>SISTEMA DE PROMOÇÃO</b>\nEscolhe o artista:", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: teclado }).catch(() => {});
-}
-
 // ==========================================
-// PROCESSAMENTO DE CLIQUES (CALLBACKS)
+// PROCESSAMENTO DOS CLIQUES (BOTÕES/CALLBACKS)
 // ==========================================
 bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
-    const messageId = query.message.message_id; // ID DA MENSAGEM DO BOTÃO
+    const messageId = query.message.message_id; 
     const userId = query.from.id;
     const data = query.data;
     const isGroup = query.message.chat.type === 'group' || query.message.chat.type === 'supergroup';
 
-    const comandosRestritos = ["menu_personagens", "menu_acoes", "menu_config", "cmd_criar_personagem", "cfg_", "ed_art_", "act_", "sel_art_"];
+    // Lista de comandos que precisam de estar "logados"
+    const comandosRestritos = ["menu_personagens", "menu_acoes", "menu_config", "cmd_criar_personagem", "cfg_", "ed_art_", "act_", "sel_art_", "promosong_"];
     const isRestrito = comandosRestritos.some(prefix => data.startsWith(prefix));
 
     if (!userSessions[userId] && isRestrito) {
         return bot.answerCallbackQuery(query.id, { text: "❌ Inicia sessão com /start no meu chat privado primeiro!", show_alert: true });
     }
 
+    // Segurança para Grupos: O botão só funciona se a pessoa que clicou for o dono do Artista
     if (data.startsWith("sel_art_") || data.startsWith("act_") || data.startsWith("ed_art_")) {
         let targetArtistId = "";
         if (data.startsWith("sel_art_")) targetArtistId = data.replace("sel_art_", "");
@@ -330,49 +332,32 @@ bot.on('callback_query', async (query) => {
 
     bot.answerCallbackQuery(query.id);
 
-    // MENSAGENS QUE EDITA
+    // VOLTAR / RECONSTRUIR MENU (EDITAR)
+    if (data === "menu_voltar") return editToMainMenu(chatId, messageId, userSessions[userId]?.name || "Visitante", isGroup, !!userSessions[userId]);
+    
     if (data === "cmd_login") {
         pendingStates[userId] = { type: 'LOGIN_NAME' };
         return bot.editMessageText(`👋 <b>Bem-vindo!</b>\n\nDigita o teu <b>Nome de Jogador</b> no campo de texto:`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(() => {});
     }
 
-    if (data === "menu_voltar") return editToMainMenu(chatId, messageId, userSessions[userId]?.name || "Visitante", isGroup, !!userSessions[userId]);
-    if (data === "menu_acoes") return editToAcoesMenu(chatId, messageId, userId);
-    if (data === "menu_config") return editToConfigMenu(chatId, messageId);
-
-    // MENSAGENS QUE SÃO NOVAS (NOVIDADES, PERSONAGENS E CHART NÃO DÁ PRA EDITAR BEM DEVIDO A FOTOS/TAMANHO)
+    // NOVIDADES, CHART E PERSONAGENS (GERAM FOTOS NOVAS)
     if (data === "menu_novidades") return handleNovidades(chatId);
+    if (data === "menu_chart") return handleChartCommand(chatId);
     if (data === "menu_personagens") return handlePersonagens(chatId, userId);
     
-    if (data === "menu_chart") {
-        bot.sendMessage(chatId, "📈 <i>A consultar o Top Global...</i>", { parse_mode: 'HTML' });
-        
-        const { data: songs, error } = await supabase.from('songs').select('id, title, streams, previous_rank, artist_ids').order('streams', { ascending: false }).limit(10);
-            
-        if (error || !songs || songs.length === 0) return bot.sendMessage(chatId, "😔 Chart indisponível.");
-        
-        let chartMsg = `🏆 <b>CHART DIÁRIO GLOBAL (TOP 10)</b> 🏆\n\n`;
-        for (const [index, s] of songs.entries()) {
-            const posicaoAtual = index + 1;
-            let trend = "➖";
-            if (!s.previous_rank) trend = "🆕";
-            else if (posicaoAtual < s.previous_rank) trend = "🔺";
-            else if (posicaoAtual > s.previous_rank) trend = "🔻";
-
-            let artistName = "Artista Desconhecido";
-            const artistIds = parseArtistIds(s.artist_ids);
-            if (artistIds.length > 0) {
-                const { data: artist } = await supabase.from('artists').select('name').eq('id', artistIds[0]).single();
-                if (artist) artistName = artist.name;
-            }
-
-            let medalha = posicaoAtual === 1 ? "🥇" : posicaoAtual === 2 ? "🥈" : posicaoAtual === 3 ? "🥉" : `<b>${posicaoAtual}.</b>`;
-            chartMsg += `${medalha} <b>${s.title}</b> - ${artistName} \n└ ${trend} • <i>${formatNumber(s.streams)} streams</i>\n\n`;
-        }
-        return bot.sendMessage(chatId, chartMsg, { parse_mode: 'HTML' });
+    // MENU CONFIGURAÇÕES (EDITAR)
+    if (data === "menu_config") {
+        const texto = `⚙️ <b>CONFIGURAÇÕES</b>\n\nAqui podes editar os teus dados de jogador e personalizar os teus artistas:`;
+        const teclado = {
+            inline_keyboard: [
+                [{ text: "✏️ Alterar Meu Nome", callback_data: "cfg_edit_p_name" }, { text: "🔒 Alterar Senha", callback_data: "cfg_edit_p_pass" }],
+                [{ text: "🖼️ Editar Meus Personagens", callback_data: "cfg_edit_art_list" }],
+                [{ text: "⬅️ Voltar", callback_data: "menu_voltar" }]
+            ]
+        };
+        return bot.editMessageText(texto, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: teclado }).catch(() => {});
     }
 
-    // CONFIGURAÇÕES (EDITAM A MENSAGEM)
     if (data === "cmd_criar_personagem" && !isGroup) {
         pendingStates[userId] = { type: 'CREATE_ARTIST_NAME' };
         return bot.editMessageText("➕ <b>Novo Personagem</b>\n\nDigita o nome do teu novo artista/grupo no campo de texto:", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(() => {});
@@ -382,6 +367,7 @@ bot.on('callback_query', async (query) => {
         pendingStates[userId] = { type: 'EDIT_PLAYER_NAME' };
         return bot.editMessageText("✏️ Digita o teu NOVO Nome de Jogador no campo de texto:", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(() => {});
     }
+
     if (data === "cfg_edit_p_pass" && !isGroup) {
         pendingStates[userId] = { type: 'EDIT_PLAYER_PASS' };
         return bot.editMessageText("🔒 Digita a tua NOVA Senha no campo de texto:", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(() => {});
@@ -401,11 +387,11 @@ bot.on('callback_query', async (query) => {
         const artistId = data.replace("ed_art_", "");
         const teclado = {
             inline_keyboard: [
-                [{ text: "✏️ Editar Nome", callback_data: `do_ed_art_name_${artistId}` }, { text: "🖼️ Editar Foto", callback_data: `do_ed_art_foto_${artistId}` }],
+                [{ text: "📝 Editar Nome", callback_data: `do_ed_art_name_${artistId}` }, { text: "🖼️ Editar Foto", callback_data: `do_ed_art_foto_${artistId}` }],
                 [{ text: "⬅️ Voltar", callback_data: "cfg_edit_art_list" }]
             ]
         };
-        return bot.editMessageText("O que pretendes alterar neste personagem?", { chat_id: chatId, message_id: messageId, reply_markup: teclado }).catch(() => {});
+        return bot.editMessageText("⚙️ <b>O que pretendes alterar neste personagem?</b>", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: teclado }).catch(() => {});
     }
 
     if (data.startsWith("do_ed_art_name_") && !isGroup) {
@@ -417,7 +403,23 @@ bot.on('callback_query', async (query) => {
         return bot.editMessageText("🖼️ Envia o NOVO URL da foto do personagem no campo de texto:", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(() => {});
     }
 
-    // AÇÕES - Selecionar tipo
+    // ==========================================
+    // MENU DE AÇÕES - 3 PASSOS (EDITA A MENSAGEM ATÉ AO FIM)
+    // ==========================================
+    
+    // Passo 1: Escolher o Artista (a partir do botão "⚡ Ações")
+    if (data === "menu_acoes") {
+        const player = userSessions[userId];
+        const artistIds = parseArtistIds(player.artist_ids);
+        if (artistIds.length === 0) return bot.editMessageText("Precisas de ter um personagem primeiro!", { chat_id: chatId, message_id: messageId }).catch(() => {});
+
+        const { data: artists } = await supabase.from('artists').select('id, name').in('id', artistIds);
+        const teclado = { inline_keyboard: artists.map(a => [{ text: `👤 ${a.name}`, callback_data: `sel_art_${a.id}` }]) };
+        teclado.inline_keyboard.push([{ text: "⬅️ Voltar", callback_data: "menu_voltar" }]);
+        return bot.editMessageText("⚡ <b>SISTEMA DE PROMOÇÃO</b>\nEscolhe o artista:", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: teclado }).catch(() => {});
+    }
+
+    // Passo 2: Escolher o Tipo de Promoção
     if (data.startsWith("sel_art_")) {
         const artistId = data.replace("sel_art_", "");
         const teclado = {
@@ -429,10 +431,10 @@ bot.on('callback_query', async (query) => {
                 [{ text: "⬅️ Voltar", callback_data: "menu_acoes" }]
             ]
         };
-        return bot.editMessageText("Seleciona a ação de promoção pretendida:", { chat_id: chatId, message_id: messageId, reply_markup: teclado }).catch(() => {});
+        return bot.editMessageText("🎯 <b>Qual ação de promoção desejas realizar?</b>", { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: teclado }).catch(() => {});
     }
 
-    // AÇÕES - Executar Ação (E ENVIAR FOTO NOVA)
+    // Passo 3: Escolher a Música (Só se houver limite)
     if (data.startsWith("act_")) {
         const match = data.match(/act_(.*)_([^_]+-[^_]+-[^_]+-[^_]+-[^_]+)$/);
         if (match) {
@@ -440,35 +442,98 @@ bot.on('callback_query', async (query) => {
             const artistId = match[2];
             
             const LIMITES_ACOES = {
-                'promo_tv_count': { limit: 20, name: 'Televisão 📺' }, 'promo_radio_count': { limit: 20, name: 'Rádio 📻' },
-                'promo_commercial_count': { limit: 10, name: 'Comercial 🛍️' }, 'promo_internet_count': { limit: 30, name: 'Internet 📱' },
-                'remix_count': { limit: 5, name: 'Remix 🎛️' }, 'mv_count': { limit: 5, name: 'Music Video (MV) 🎬' },
-                'capas_count': { limit: 5, name: 'Capas de Revista 📸' }, 'parceria_count': { limit: 5, name: 'Parcerias com Marcas 🤝' }
+                'promo_tv_count': { limit: 20, minStreams: 35000, maxStreams: 350000, name: 'Televisão 📺' }, 
+                'promo_radio_count': { limit: 20, minStreams: 20000, maxStreams: 50000, name: 'Rádio 📻' },
+                'promo_commercial_count': { limit: 10, minStreams: 60000, maxStreams: 180000, name: 'Comercial 🛍️' }, 
+                'promo_internet_count': { limit: 30, minStreams: 10000, maxStreams: 210000, name: 'Internet 📱' },
+                'remix_count': { limit: 5, minStreams: 60000, maxStreams: 450000, name: 'Remix 🎛️' }, 
+                'mv_count': { limit: 5, minStreams: 60000, maxStreams: 450000, name: 'Music Video (MV) 🎬' },
+                'capas_count': { limit: 5, minStreams: 60000, maxStreams: 450000, name: 'Capas de Revista 📸' }, 
+                'parceria_count': { limit: 5, minStreams: 60000, maxStreams: 450000, name: 'Parcerias com Marcas 🤝' }
             };
 
             const configDaAcao = LIMITES_ACOES[actionKey];
-
             const { data: artist } = await supabase.from('artists').select('*').eq('id', artistId).single();
             const countAtual = artist[actionKey] || 0;
 
             if (countAtual >= configDaAcao.limit) {
-                return bot.answerCallbackQuery(query.id, { text: `❌ Limite Atingido! ${artist.name} já tem ${configDaAcao.limit}/${configDaAcao.limit} em ${configDaAcao.name}.`, show_alert: true });
+                return bot.editMessageText(`❌ <b>Limite Atingido!</b>\nO personagem <b>${artist.name}</b> já atingiu o limite semanal de ${configDaAcao.limit}/${configDaAcao.limit} para ${configDaAcao.name}.`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "⬅️ Voltar", callback_data: `sel_art_${artistId}` }]] } }).catch(() => {});
             }
 
-            const newVal = countAtual + 1;
-            await supabase.from('artists').update({ [actionKey]: newVal }).eq('id', artistId);
-            
-            const foto = artist.image_url || "https://i.imgur.com/AD3MbBi.png";
-            
-            // Edita a mensagem do menu a dizer que foi sucesso
-            bot.editMessageText(`✅ <b>Ação registada!</b> A enviar confirmação visual...`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' }).catch(() => {});
-            
-            // E envia a nova foto de confirmação
-            bot.sendPhoto(chatId, foto, { 
-                caption: `✅ <b>AÇÃO DE PROMOÇÃO REALIZADA!</b>\n\nO personagem <b>${artist.name}</b> participou em: <b>${configDaAcao.name}</b>.\n\n📈 Limite semanal atual: <b>${newVal}/${configDaAcao.limit}</b>`, 
-                parse_mode: 'HTML' 
-            });
+            const { data: allSongs } = await supabase.from('songs').select('id, title, artist_ids');
+            const artistSongs = allSongs.filter(s => parseArtistIds(s.artist_ids).includes(artistId));
+
+            if (!artistSongs || artistSongs.length === 0) {
+                return bot.editMessageText(`❌ <b>${artist.name}</b> não tem músicas lançadas para divulgar!`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: "⬅️ Voltar", callback_data: `sel_art_${artistId}` }]] } }).catch(() => {});
+            }
+
+            pendingStates[userId] = {
+                type: 'SELECT_PROMO_SONG',
+                actionKey: actionKey,
+                artistId: artistId,
+                artistName: artist.name,
+                artistImg: artist.image_url,
+                countAtual: countAtual
+            };
+
+            const teclado = { inline_keyboard: [] };
+            for (let i = 0; i < Math.min(artistSongs.length, 30); i += 2) {
+                const row = [];
+                row.push({ text: `🎵 ${artistSongs[i].title}`, callback_data: `promosong_${artistSongs[i].id}` });
+                if (i + 1 < artistSongs.length) {
+                    row.push({ text: `🎵 ${artistSongs[i+1].title}`, callback_data: `promosong_${artistSongs[i+1].id}` });
+                }
+                teclado.inline_keyboard.push(row);
+            }
+            teclado.inline_keyboard.push([{ text: "⬅️ Cancelar", callback_data: `sel_art_${artistId}` }]);
+
+            bot.editMessageText(`🎯 <b>Qual música do(a) ${artist.name} vai ser divulgada em ${configDaAcao.name}?</b>\n\n<i>(Isto vai gerar streams para a música selecionada)</i>`, { 
+                chat_id: chatId, message_id: messageId, parse_mode: 'HTML', reply_markup: teclado 
+            }).catch(() => {});
         }
+    }
+
+    // Passo 4 (Final): Processar a ação, fazer os cálculos matemáticos e ENVIAR MENSAGEM NOVA COM FOTO
+    if (data.startsWith("promosong_")) {
+        const songId = data.replace("promosong_", "");
+        const state = pendingStates[userId];
+
+        if (!state || state.type !== 'SELECT_PROMO_SONG') {
+            return bot.sendMessage(chatId, "❌ Sessão expirou. Por favor, começa de novo pelo /menu.");
+        }
+
+        const LIMITES_ACOES = {
+            'promo_tv_count': { limit: 20, minStreams: 35000, maxStreams: 350000, name: 'Televisão 📺' }, 
+            'promo_radio_count': { limit: 20, minStreams: 20000, maxStreams: 50000, name: 'Rádio 📻' },
+            'promo_commercial_count': { limit: 10, minStreams: 60000, maxStreams: 180000, name: 'Comercial 🛍️' }, 
+            'promo_internet_count': { limit: 30, minStreams: 10000, maxStreams: 210000, name: 'Internet 📱' },
+            'remix_count': { limit: 5, minStreams: 60000, maxStreams: 450000, name: 'Remix 🎛️' }, 
+            'mv_count': { limit: 5, minStreams: 60000, maxStreams: 450000, name: 'Music Video (MV) 🎬' },
+            'capas_count': { limit: 5, minStreams: 60000, maxStreams: 450000, name: 'Capas de Revista 📸' }, 
+            'parceria_count': { limit: 5, minStreams: 60000, maxStreams: 450000, name: 'Parcerias com Marcas 🤝' }
+        };
+
+        const configDaAcao = LIMITES_ACOES[state.actionKey];
+        const { data: song } = await supabase.from('songs').select('title, streams').eq('id', songId).single();
+
+        const streamsGanhos = Math.floor(Math.random() * (configDaAcao.maxStreams - configDaAcao.minStreams + 1)) + configDaAcao.minStreams;
+        const novoStreams = (song.streams || 0) + streamsGanhos;
+        const novoActionCount = state.countAtual + 1;
+
+        await supabase.from('songs').update({ streams: novoStreams }).eq('id', songId);
+        await supabase.from('artists').update({ [state.actionKey]: novoActionCount }).eq('id', state.artistId);
+
+        delete pendingStates[userId];
+
+        // Edita o balão atual dizendo que completou, e reconstrói o menu inicial nele para o jogador poder continuar a jogar rapidamente
+        editToMainMenu(chatId, messageId, userSessions[userId].name, isGroup, true);
+        
+        // Atira a fotografia por cima como "recompensa visual"
+        const foto = state.artistImg || "https://i.imgur.com/AD3MbBi.png";
+        bot.sendPhoto(chatId, foto, { 
+            caption: `✅ <b>AÇÃO DE PROMOÇÃO CONCLUÍDA!</b>\n\nO personagem <b>${state.artistName}</b> promoveu a música <b>${song.title}</b> em: <b>${configDaAcao.name}</b>.\n\n📈 Streams Ganhos: <b>+${formatNumber(streamsGanhos)}</b>\n💿 Streams Diários da Música: <b>${formatNumber(novoStreams)}</b>\n📊 Limite Semanal da Ação: <b>${novoActionCount}/${configDaAcao.limit}</b>`, 
+            parse_mode: 'HTML' 
+        });
     }
 });
 
