@@ -34,32 +34,36 @@ function parseArtistIds(ids) {
 }
 
 // ==========================================
-// COMANDOS GERAIS (/menu, /start, /novidade)
+// COMANDOS GERAIS (Agora adaptados para Grupos)
 // ==========================================
 
-bot.onText(/\/(novidade|novidades)/, (msg) => {
+// O regex (?:@\w+)? permite que o comando funcione com ou sem o @ do bot no grupo
+bot.onText(/^\/(novidade|novidades)(?:@\w+)?$/, (msg) => {
     handleNovidades(msg.chat.id);
 });
 
-bot.onText(/\/menu/, (msg) => {
+bot.onText(/^\/chart(?:@\w+)?$/, (msg) => {
+    handleChart(msg.chat.id);
+});
+
+bot.onText(/^\/menu(?:@\w+)?$/, (msg) => {
     const userId = msg.from.id;
     const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
     
-    // Aceita visitantes! Se não tiver login, entra como Visitante.
     const isLoggedIn = !!userSessions[userId];
     const playerName = isLoggedIn ? userSessions[userId].name : "Visitante";
     
     sendMainMenu(msg.chat.id, playerName, isGroup, isLoggedIn);
 });
 
-bot.onText(/\/start/, async (msg) => {
+bot.onText(/^\/start(?:@\w+)?$/, async (msg) => {
     const userId = msg.from.id;
     const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
 
     if (isGroup) {
         return bot.sendMessage(msg.chat.id, `👋 Bem-vindos ao <b>Spotify RPG</b>!\n\nUsa o comando /menu para veres os charts e novidades, ou fala comigo no privado para gerires a tua agência.`, { 
             parse_mode: 'HTML', 
-            reply_markup: { inline_keyboard: [[{ text: "🎧 Fazer Login (Privado)", url: `https://t.me/${(await bot.getMe()).username}` }]] }
+            reply_markup: { inline_keyboard: [[{ text: "🎧 Fazer Login (Privado)", url: `https://t.me/SpotifyRpgBot` }]] } // Altera para o link real do teu bot
         });
     }
 
@@ -166,7 +170,6 @@ bot.on('message', async (msg) => {
 // ==========================================
 function sendMainMenu(chatId, playerName, isGroup, isLoggedIn) {
     let texto = `🎵 <b>CENTRAL DO MANAGER</b>\n\nOlá, <b>${playerName}</b>! O que desejas fazer?`;
-    
     const teclado = { inline_keyboard: [] };
     
     teclado.inline_keyboard.push([{ text: "🌟 Novidades", callback_data: "menu_novidades" }, { text: "📈 Ver Chart Diário", callback_data: "menu_chart" }]);
@@ -188,7 +191,14 @@ function sendMainMenu(chatId, playerName, isGroup, isLoggedIn) {
         }
     }
 
-    teclado.inline_keyboard.push([{ text: "🎮 Abrir Web App", web_app: { url: "https://melancholyloveoff.github.io/spotify/" } }]);
+    // A SOLUÇÃO MÁGICA PARA GRUPOS!
+    if (isGroup) {
+        // Telegram proíbe web_app em grupos, enviamos link normal
+        teclado.inline_keyboard.push([{ text: "🎮 Abrir o Jogo (Site)", url: "https://melancholyloveoff.github.io/spotify/" }]);
+    } else {
+        // No privado, funciona como Web App
+        teclado.inline_keyboard.push([{ text: "🎮 Abrir Web App", web_app: { url: "https://melancholyloveoff.github.io/spotify/" } }]);
+    }
 
     bot.sendMessage(chatId, texto, { parse_mode: 'HTML', reply_markup: teclado });
 }
@@ -206,54 +216,75 @@ function sendConfigMenu(chatId) {
 }
 
 // ==========================================
-// LISTAGENS, NOVIDADES E AÇÕES (COM FOTOS)
+// FUNÇÕES AUTÓNOMAS (CHART, NOVIDADES, ETC)
 // ==========================================
+
+async function handleChart(chatId) {
+    bot.sendMessage(chatId, "📈 <i>A consultar o Top Global...</i>", { parse_mode: 'HTML' });
+    
+    const { data: songs, error } = await supabase.from('songs').select('id, title, streams, previous_rank, artist_ids').order('streams', { ascending: false }).limit(10);
+        
+    if (error || !songs || songs.length === 0) return bot.sendMessage(chatId, "😔 Chart indisponível.");
+    
+    let chartMsg = `🏆 <b>CHART DIÁRIO GLOBAL (TOP 10)</b> 🏆\n\n`;
+    for (const [index, s] of songs.entries()) {
+        const posicaoAtual = index + 1;
+        let trend = "➖";
+        if (!s.previous_rank) trend = "🆕";
+        else if (posicaoAtual < s.previous_rank) trend = "🔺";
+        else if (posicaoAtual > s.previous_rank) trend = "🔻";
+
+        let artistName = "Artista Desconhecido";
+        const artistIds = parseArtistIds(s.artist_ids);
+        if (artistIds.length > 0) {
+            const { data: artist } = await supabase.from('artists').select('name').eq('id', artistIds[0]).single();
+            if (artist) artistName = artist.name;
+        }
+
+        let medalha = posicaoAtual === 1 ? "🥇" : posicaoAtual === 2 ? "🥈" : posicaoAtual === 3 ? "🥉" : `<b>${posicaoAtual}.</b>`;
+        chartMsg += `${medalha} <b>${s.title}</b> - ${artistName} \n└ ${trend} • <i>${formatNumber(s.streams)} streams</i>\n\n`;
+    }
+    return bot.sendMessage(chatId, chartMsg, { parse_mode: 'HTML' });
+}
 
 async function handleNovidades(chatId) {
     bot.sendMessage(chatId, "🌟 <i>A reunir as últimas novidades da Agência...</i>", { parse_mode: 'HTML' });
-    
     try {
         let encontrouNovidades = false;
 
-        // 1. LANÇAMENTOS RECENTES (Álbuns e Singles)
+        // 1. LANÇAMENTOS RECENTES
         const { data: albums } = await supabase.from('albums').select('id, title, image_url, release_date, artist_id').not('release_date', 'is', null).order('release_date', { ascending: false }).limit(3);
         const { data: singles } = await supabase.from('singles').select('id, title, image_url, release_date, artist_id').not('release_date', 'is', null).order('release_date', { ascending: false }).limit(3);
         
         let releases = [];
         if (albums) releases.push(...albums.map(a => ({...a, type: 'Álbum'})));
         if (singles) releases.push(...singles.map(s => ({...s, type: 'Single'})));
-        
         releases.sort((a, b) => new Date(b.release_date) - new Date(a.release_date));
         releases = releases.slice(0, 3);
         
         if (releases.length > 0) {
             encontrouNovidades = true;
             await bot.sendMessage(chatId, "💿 <b>ÚLTIMOS LANÇAMENTOS:</b>", { parse_mode: 'HTML' });
-            
             for (const item of releases) {
                 let artistName = "Artista Desconhecido";
                 if (item.artist_id) {
                     const { data: art } = await supabase.from('artists').select('name').eq('id', item.artist_id).single();
                     if (art) artistName = art.name;
                 }
-                
                 const dataStr = new Date(item.release_date).toLocaleDateString('pt-BR');
                 const legenda = `🌟 <b>NOVO LANÇAMENTO</b>\n\n💿 <b>${item.title}</b> (${item.type})\n👤 Artista: <b>${artistName}</b>\n📅 Data: ${dataStr}`;
                 const foto = item.image_url || "https://i.imgur.com/AD3MbBi.png";
-                
                 await bot.sendPhoto(chatId, foto, { caption: legenda, parse_mode: 'HTML' });
             }
         }
 
         await new Promise(resolve => setTimeout(resolve, 500)); 
 
-        // 2. ARTISTAS RECENTES (Até 3 novos talentos)
+        // 2. ARTISTAS RECENTES
         const { data: artists } = await supabase.from('artists').select('id, name, image_url, rpg_points').order('id', { ascending: false }).limit(3);
-        
         if (artists && artists.length > 0) {
             encontrouNovidades = true;
             await bot.sendMessage(chatId, "👤 <b>NOVOS ARTISTAS NA AGÊNCIA:</b>", { parse_mode: 'HTML' });
-            
             for (const artist of artists) {
                 const legenda = `🌟 <b>NOVO ARTISTA</b>\n\n👤 <b>${artist.name}</b>\n✨ Pontos RPG Iniciais: <b>${artist.rpg_points || 0}</b>`;
                 const foto = artist.image_url || "https://i.imgur.com/AD3MbBi.png";
@@ -264,21 +295,17 @@ async function handleNovidades(chatId) {
         if (!encontrouNovidades) {
             bot.sendMessage(chatId, "😔 Nenhuma novidade encontrada no catálogo de momento.");
         }
-
     } catch (error) {
         bot.sendMessage(chatId, "❌ Ocorreu um erro ao procurar as novidades.");
-        console.error("Erro nas novidades:", error);
     }
 }
 
 async function handlePersonagens(chatId, userId) {
     const player = userSessions[userId];
     const artistIds = parseArtistIds(player.artist_ids);
-
     if (artistIds.length === 0) return bot.sendMessage(chatId, "A tua agência está vazia. Usa a opção 'Criar Personagem' no privado!");
 
     const { data: artists } = await supabase.from('artists').select('*').in('id', artistIds);
-
     for (const artist of artists) {
         const legenda = `👤 <b>${artist.name}</b>\n✨ Pontos RPG: <b>${artist.rpg_points || 0}</b> | 💎 Pessoais: <b>${artist.personal_points || 0}</b>`;
         const foto = artist.image_url || "https://i.imgur.com/AD3MbBi.png";
@@ -306,7 +333,6 @@ bot.on('callback_query', async (query) => {
     const data = query.data;
     const isGroup = query.message.chat.type === 'group' || query.message.chat.type === 'supergroup';
 
-    // Lista de comandos que EXIGEM login para funcionar
     const comandosRestritos = ["menu_personagens", "menu_acoes", "menu_config", "cmd_criar_personagem", "cfg_", "ed_art_", "act_", "sel_art_"];
     const isRestrito = comandosRestritos.some(prefix => data.startsWith(prefix));
 
@@ -314,7 +340,6 @@ bot.on('callback_query', async (query) => {
         return bot.answerCallbackQuery(query.id, { text: "❌ Inicia sessão com /start no meu chat privado primeiro!", show_alert: true });
     }
 
-    // Segurança para Grupos: Apenas o dono pode fazer ações no seu próprio personagem!
     if (data.startsWith("sel_art_") || data.startsWith("act_") || data.startsWith("ed_art_")) {
         let targetArtistId = "";
         if (data.startsWith("sel_art_")) targetArtistId = data.replace("sel_art_", "");
@@ -329,48 +354,23 @@ bot.on('callback_query', async (query) => {
 
     bot.answerCallbackQuery(query.id);
 
-    // Botões de Login Manual (Menu Visitante no Privado)
     if (data === "cmd_login") {
         pendingStates[userId] = { type: 'LOGIN_NAME' };
         return bot.sendMessage(chatId, `👋 <b>Bem-vindo!</b>\n\nDigita o teu <b>Nome de Jogador</b>:`, { parse_mode: 'HTML' });
     }
 
-    // Navegação Básica
     if (data === "menu_voltar") return sendMainMenu(chatId, userSessions[userId]?.name || "Visitante", isGroup, !!userSessions[userId]);
     if (data === "menu_novidades") return handleNovidades(chatId);
     if (data === "menu_personagens") return handlePersonagens(chatId, userId);
     if (data === "menu_acoes") return handleAcoesMenu(chatId, userId);
     if (data === "menu_config") return sendConfigMenu(chatId);
+    if (data === "menu_chart") return handleChart(chatId);
 
-    // Chart Global
-    if (data === "menu_chart") {
-        bot.sendMessage(chatId, "📈 <i>A consultar o Top Global...</i>", { parse_mode: 'HTML' });
-        
-        const { data: songs, error } = await supabase.from('songs').select('id, title, streams, previous_rank').order('streams', { ascending: false }).limit(10);
-            
-        if (error || !songs || songs.length === 0) return bot.sendMessage(chatId, "😔 Chart indisponível.");
-        
-        let chartMsg = `🏆 <b>CHART DIÁRIO GLOBAL (TOP 10)</b> 🏆\n\n`;
-        songs.forEach((s, index) => {
-            const posicaoAtual = index + 1;
-            let trend = "➖";
-            if (!s.previous_rank) trend = "🆕";
-            else if (posicaoAtual < s.previous_rank) trend = "🔺";
-            else if (posicaoAtual > s.previous_rank) trend = "🔻";
-
-            let medalha = posicaoAtual === 1 ? "🥇" : posicaoAtual === 2 ? "🥈" : posicaoAtual === 3 ? "🥉" : `<b>${posicaoAtual}.</b>`;
-            chartMsg += `${medalha} ${s.title} \n└ ${trend} • <i>${formatNumber(s.streams)} streams</i>\n\n`;
-        });
-        return bot.sendMessage(chatId, chartMsg, { parse_mode: 'HTML' });
-    }
-
-    // Criar Personagem (Só Privado)
     if (data === "cmd_criar_personagem" && !isGroup) {
         pendingStates[userId] = { type: 'CREATE_ARTIST_NAME' };
         return bot.sendMessage(chatId, "➕ <b>Novo Personagem</b>\n\nDigita o nome do teu novo artista/grupo:", { parse_mode: 'HTML' });
     }
 
-    // Configurações (Só Privado)
     if (data === "cfg_edit_p_name" && !isGroup) {
         pendingStates[userId] = { type: 'EDIT_PLAYER_NAME' };
         return bot.sendMessage(chatId, "✏️ Digita o teu NOVO Nome de Jogador:");
@@ -384,7 +384,6 @@ bot.on('callback_query', async (query) => {
         const artistIds = parseArtistIds(userSessions[userId].artist_ids);
         if(artistIds.length === 0) return bot.sendMessage(chatId, "Não tens personagens para editar.");
         const { data: artists } = await supabase.from('artists').select('id, name').in('id', artistIds);
-        
         const teclado = { inline_keyboard: artists.map(a => [{ text: `✏️ ${a.name}`, callback_data: `ed_art_${a.id}` }]) };
         teclado.inline_keyboard.push([{ text: "⬅️ Voltar", callback_data: "menu_config" }]);
         return bot.sendMessage(chatId, "Qual o personagem que desejas editar?", { reply_markup: teclado });
@@ -410,7 +409,6 @@ bot.on('callback_query', async (query) => {
         return bot.sendMessage(chatId, "🖼️ Envia o NOVO URL da foto do personagem:");
     }
 
-    // Ações - Listar Promoções
     if (data.startsWith("sel_art_")) {
         const artistId = data.replace("sel_art_", "");
         const teclado = {
@@ -425,43 +423,30 @@ bot.on('callback_query', async (query) => {
         return bot.sendMessage(chatId, "Seleciona a ação de promoção pretendida:", { reply_markup: teclado });
     }
 
-    // Ações - Executar Ação (COM LIMITES) e Enviar Foto
     if (data.startsWith("act_")) {
         const match = data.match(/act_(.*)_([^_]+-[^_]+-[^_]+-[^_]+-[^_]+)$/);
         if (match) {
             const actionKey = match[1]; 
             const artistId = match[2];
             
-            // Dicionário com os limites oficiais baseados no state.js
             const LIMITES_ACOES = {
-                'promo_tv_count': { limit: 20, name: 'Televisão 📺' },
-                'promo_radio_count': { limit: 20, name: 'Rádio 📻' },
-                'promo_commercial_count': { limit: 10, name: 'Comercial 🛍️' },
-                'promo_internet_count': { limit: 30, name: 'Internet 📱' },
-                'remix_count': { limit: 5, name: 'Remix 🎛️' },
-                'mv_count': { limit: 5, name: 'Music Video (MV) 🎬' },
-                'capas_count': { limit: 5, name: 'Capas de Revista 📸' },
-                'parceria_count': { limit: 5, name: 'Parcerias com Marcas 🤝' }
+                'promo_tv_count': { limit: 20, name: 'Televisão 📺' }, 'promo_radio_count': { limit: 20, name: 'Rádio 📻' },
+                'promo_commercial_count': { limit: 10, name: 'Comercial 🛍️' }, 'promo_internet_count': { limit: 30, name: 'Internet 📱' },
+                'remix_count': { limit: 5, name: 'Remix 🎛️' }, 'mv_count': { limit: 5, name: 'Music Video (MV) 🎬' },
+                'capas_count': { limit: 5, name: 'Capas de Revista 📸' }, 'parceria_count': { limit: 5, name: 'Parcerias com Marcas 🤝' }
             };
 
             const configDaAcao = LIMITES_ACOES[actionKey];
-
-            // 1. Vai buscar os dados atuais
             const { data: artist } = await supabase.from('artists').select('*').eq('id', artistId).single();
             const countAtual = artist[actionKey] || 0;
 
-            // 2. VERIFICA O LIMITE!
             if (countAtual >= configDaAcao.limit) {
                 return bot.sendMessage(chatId, `❌ <b>Limite Atingido!</b>\nO personagem <b>${artist.name}</b> já atingiu o limite semanal de ${configDaAcao.limit}/${configDaAcao.limit} para ${configDaAcao.name}.`, { parse_mode: 'HTML' });
             }
 
-            // 3. Se ainda tiver ações, soma +1
             const newVal = countAtual + 1;
-            
-            // 4. Grava no Supabase
             await supabase.from('artists').update({ [actionKey]: newVal }).eq('id', artistId);
             
-            // 5. Responde
             const foto = artist.image_url || "https://i.imgur.com/AD3MbBi.png";
             bot.sendPhoto(chatId, foto, { 
                 caption: `✅ <b>AÇÃO DE PROMOÇÃO REALIZADA!</b>\n\nO personagem <b>${artist.name}</b> participou em: <b>${configDaAcao.name}</b>.\n\n📈 Limite semanal atual: <b>${newVal}/${configDaAcao.limit}</b>`, 
